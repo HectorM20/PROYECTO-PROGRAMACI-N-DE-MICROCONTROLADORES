@@ -1,340 +1,605 @@
-//******************************************************************************************************************
-;Universidad del Valle de Guatemala 
-;IE2023: Programación de Microcontroladores 
-; Autor: Héctor Martínez 
-; Hardware: ATMEGA328p
-;PROYECTO RELOJ
-//******************************************************************************************************************
-//ENCABEZADO
-//******************************************************************************************************************
-.INCLUDE "M328PDEF.INC"
-.DEF MODO = R20
-.DEF ESTADO = R21
-.DEF CONTADOR = R22
+//***************************************************************
+//Universidad del Valle de Guatemala 
+//IE023: Programación de Microcontroladores
+//Autor: Héctor Alejandro Martínez Guerra
+//Hardware: ATMEGA328P
+//Proyecto 1 - Reloj
+//Encabezado
+//***************************************************************
+
+.include "M328PDEF.inc"
+.def Estado = R20 
+.cseg
+.org 0x00
+	 JMP Inicio// vector reset
+.org 0x0008
+	 JMP ISR_PCINT1
+.org 0x001A
+	JMP ISR_TIMER1_OVF// vector overflow timer1
+.org 0x0020
+	JMP ISR_TIMER0_OVF
 
 
-.CSEG
-.ORG 0x0000
-	JMP MAIN:				;Vector Reset
-.ORG 0x0020
-	JMP ISR_TIMER0_OVF		;Vector ISR de timer0
-MAIN: 
-//******************************************************************************************************************
-//STACK POINTER
-//******************************************************************************************************************	
-LDI R16, LOW(RAMEND)
-OUT SPL, R16
-LDI R17, HIGH(RAMEND)
-OUT SPH, R17	
-//******************************************************************************************************************
+; ***************************
+; Tabla de conversión para los displays de 7 segmentos
+; ***************************
+TABLA: .DB 0x3F, 0x06, 0x5B, 0x4F, 0x66, 0x6D, 0x7C, 0x07, 0x7F, 0x6F
 
-//******************************************************************************************************************
-//Configuración 
-//******************************************************************************************************************
-Setup:
+Inicio: 
+//***************************
+// Stack Pointer
+//***************************
+	LDI R16, LOW(RAMEND)
+	OUT SPL, R16
+
+	LDI R17, HIGH(RAMEND)
+	OUT SPH, R17
+//***************************
+; configuraciones
+//***************************
 	LDI R16, 0b1000_0000
-	LDI R16, (1 << CLKPCE)
-	STS CLKPR, R16								;Habilitando presacaler
+	LDI R16, (1 << CLKPCE) //Corrimiento a CLKPCE
+	STS CLKPR, R16        // Habilitando el prescaler 
+	LDI R16, 0b0000_0100
+	STS CLKPR, R16   //Frecuencia del sistema de 1MHz
 
-	LDI R16, 0b0000_0001						
-	STS CLKPR, R16								;Frecuencia 8MHz
+; *********
+; CONFIGURACIÓN DE PUERTOS
+; *********  
+    LDI R16, 0b01111111
+    OUT DDRD, R16   ; Configurar pin PD0 a PD6 Como salida
 
-	SBI PORTC, PC0								;Habilitando PULL-UP en PC0
-	CBI DDRC, PC0								;Habilitando PC0 como entrada
+    LDI R16, 0b0001_1111
+    OUT DDRB, R16   ; (PB1 y PB0  PB3 y PB4 como salida) multiplexación, pb2 leds parpadeo
 
-	SBI PORTC, PC1	
-	CBI DDRC, PC1								
-
-	SBI PORTC, PC2	
-	CBI DDRC, PC2
-
-	SBI PORTC, PC3	
-	CBI DDRC, PC3
-
-	SBI PORTC, PC4	
-	CBI DDRC, PC4								;MODO
-
-	LDI R16, 0b01111111							;Establecer PD0 a PD6 como salidas del display
-	OUT DDRD, R16
-
-	LDI R16, 0b00011111							;Establecer PB0 a PB4 como salidas
-;alarma 
-
-MAIN:
-;*****************************************************************
-;STACK POINTER 
-;*****************************************************************
-LDI R16, LOW(RAMEND)
-OUT SPL, R16
-LDI R17, HIGH(RAMEND)
-OUT SPH, R17
-
-;*****************************************************************
-;CONFIGURACIÓN
-;*****************************************************************
-SETUP:
-
-
-	LDI R16, 0b1000_0000
-	LDI R16, (1<<CLKPCE)					;Corrimiento a CLKPCE
-	STS CLKPR, R16
-
-	LDI R16, 0b0000_0001					
-	STS CLKPR, R16							;Frecuencia del sistema de 8MHz
-
-	LDI R16, 0b11111111
-	OUT DDRD, R16							;Configurar pin PD0 a PD6 como salida
-
-	LDI R16, 0b00001111
-	OUT DDRB, R16							;Configurar PB1 y PB2 como entrada y PB3 y PB4 como salida}
-	LDI R16, 0b00001111
-	OUT PORTB, R16							;Configurar PULLUP de pin PB1 Y PB2
-
-	LDI R16, 0b00111111
-	OUT DDRC, R16
-	LDI R18, 0
-
-	LDI R16, (1<<PCIE0)
-	STS PCICR, R16							;Habilitando PCINT 0-7 
-
-	LDI R16, (1<<PCINT1)|(1<<PCINT2)
-	STS PCMSK0, R16							;Registro de la máscara
-	SBI PINB, PB4							;Enceder display 2
-	SEI										;Habilitar interrupciones globales
-	LDI R19, 0								;Displays
-	LDI R17, 0
-	LDI R28, 0
-	LDI R25, 0 
-
-	TABLA: .DB 0x7D,0x48,0x3E,0x6E,0x4B,0x67,0x77,0x4C,0x7F,0x4F
-	LDI R22, 0								;Contador de unidades 
-	LDI R21, 0								;Contador de decenas
-	CALL INITTIMER0
-
-
-LOOP: 
-	CPI R22, 10
-	BREQ RESETT
-	CPI R23, 50								
-	BREQ UNIDADES
-
-		CALL RETARDO 
-		SBI PINB, PB3
-		SBI PINB, PB4
-
-		LDI ZH, HIGH(TABLA<<1)			;Da el byte menos significativo
-		LDI ZL, LOW(TABLA<<1)			;Va a dirección de TABLA
-		ADD ZL, R21
-		LPM R25, Z
-		OUT PORTD, R25
-
-
-		CALL RETARDO
-		SBI PINB, PB3
-		SBI PINB, PB4
-		
-		LDI ZH, HIGH(TABLA<<1)			;Da el byte menos significativo
-		LDI ZL, LOW(TABLA<<1)			;Va a dirección de TABLA
-		ADD ZL, R22
-		OUT PORTD, R25
-		CALL RETARDO 
-
-		CPI R21, 6
-		BREQ RESDE
-	JMP LOOP								;Regresa al LOOP
-
-	RETARDO:
-	LDI R19, 255							;Cargar con una valor a R16
-	delay:
-		DEC R19								;Decrementa R16
-		BRNE delay							;Si R16 no es igual a 0, tira al delay
-	LDI R19, 255							;Carga con un valor a R16
-	delay1:
-		DEC R19								;Decrementa R16
-		BRNE delay1							;Si R16 no es igual a 0, tira al delay
-	LDI R19, 255							;Carga con un valor a R16
-	delay2:
-		DEC R19								;Decrementa R16
-		BRNE delay2							;Si R16 no es igual a 0, tira al delay
-	LDI R19, 255							;Carga con un valor a R16
-	delay3:
-		DEC R19								;Decrementa R16
-		BRNE delay3							;Si R16 no es igual a 0, tira al delay
-
-	RET
-
-	RESETT:									;Reset para el contadoe de unidades
-		LDI R22, 0
-		INC R21								;Suma de contador de decenas
-		JMP LOOP 
-
-	UNIDADES:								;Contador de Unidades
-		INC R22
-		LDI R23, 0
-		JMP LOOP
-
-	RESDE:
-		CALL RETARDO 
-		LDI R21, 0
-		LDI R22, 0
-		JMP LOOP
-
-
-;*****************************************************************
-;Inicio del timer0
-INITTIMER0:									;Arrancar timer0
-	LDI R26, 0
-	OUT TCCR0A, R26							;Trabajar de forma normal con el temporizador
 	
-	LDI R26, (1<<CS02)|(1<<CS00)
-	OUT TCCR0B, R26							;Configurar el temporizador con prescaler de 1024	 
+	//Entradas y pull-up
+   	LDI R16, 0b0000_1111   //Cargar un byte con los bits PC0, PC1, PC2 y PC3 establecidos
+	OUT DDRC, R16          //Configurar PC0, PC1, PC2, PC3 y PC4 como entradas
+	OUT PORTC, R16         //Habilitar las resistencias pull-up en PC0, PC1, PC2 y PC3
 
-	LDI R26, 100
-	OUT TCNT0, R26							;Iniciar timer en 158 para conteo 
-
-	LDI R26, (1<<TOIE0)
-	STS TIMSK0, R26							;Activar interrupción del timer0 de máscara por overflow
-
-	RET
-
-;*****************************************************************
-;Subrutina de pulsadores
-
-ISR_PCINT0:
-	PUSH R16								;Se guarda en pila de registro R16
-	in R16, SREG
-	PUSH R16
-
-	IN R20, PINB							;Leer puerto B
-	SBRC R20, PB1							;Salta si el bit del registro  es 1
-
-	JMP CPB2								;Verifica si esta presionado el pin PB2
-
-	DEC R18									;Decrementa R18
-	JMP EXIT
-
-CPB2: 
-	SBRC R20, PB2							;verifica si PB2 esta a 1
-	JMP EXIT
-
-	INC R18									;Incrementa R18
-	JMP EXIT
-
-EXIT: 
-	CPI R18, -1
-	BREQ res1
-	CPI R18, R16
-	BREQ res2
-
-	OUT PORTC, R18
-	SBI PCIFR, PCIF0						;Apagar la bandera de ISR PCINT0
-
-	POP R16									;Obtener el valor de SREG
-	OUT SREG, R16							;Restaurar los valores de SREG 
-	POP R16
-	RETI									;Retorna de la ISR
-
-res1:										;reseteo del valor bajo
-	LDI R18, 0
-	OUT PORTC, R18
-	JMP EXIT
-
-res2:										;reseteo del valor alto
-	LDI R18, 15
-	OUT PORTC, R18
-	JMP EXIT
 	
-;*****************************************************************
-;Subrutina del Timer0
+	LDI R16, (1 << PCINT8) | (1 << PCINT9) | (1 << PCINT10) | (1 << PCINT11)| (1<<PCINT12) ; Habilitar las interrupciones de PCINT8 a PCINT12
+    STS PCMSK1, R16        
+	LDI R16, (1 << PCIE1) 
+	STS PCICR, R16         
 
-ISR_TIMER0_OVF:
-	PUSH R16								;Se guarda R16 en la pila
-	IN R16, SREG					
-	PUSH R16
+	SEI
 
-	LDI R16, 100							;cargar el valor de desbordamiento 
-	OUT TCNT0, R16							;cargar el valor inicial del contador 
-	SBI TIFR0, TOV0							;borra la bandera de TOV0
-	INC R23									;incrementar el contador de 20ms 
-
-	POP R16									;Obtener el valor del SREG
-	OUT SREG, R16							;restaurar antiguas valores del SREG
-	POP R16									;Obtener el valor de R16
-
-	RETI									;retornar al LOOP
-
-//ALARMA
-
-//******************************************************************************************************************
-//Subrutina para inicializar TIMER0
-//******************************************************************************************************************
-INITIMER0: 
-	LDI R16, (1<<CS02)|(1<<Cs00)		;Configurar el prescaler a 1024
-	OUT TCCR0B, R16
-
-	LDI R16, 100						;Cargar el valor de desbordamiento 
-	OUT TCNT0, R16						;Cargar el valor inicial del contador
+	LDI Estado, 1
+	LDI R23, 0 ;contador de pasadas del timer
+    LDI R22, 0 ; Contador de las unidades 
+    LDI R21, 0  ; Contador de las decenas 
+    LDI R19, 0  ; Contador de las unidades 
+    LDI R17, 0  ; Contador de las decenas 
+	CLR R30 //CONTAR HORAS
+	
+//Inicializar contadores de fecha en 0
+//el reloj inicia en 1 de enero
+	LDI R24, 1	//unidad de dias
+	CLR R26		//decena de dias
+	LDI R27, 1 //unidad de mes
+	CLR R28   //decena de mes
+	CLR R29   //DIAS MES
+	CLR R12	  //MES
+	CLR R13	  //DIA
+	
+// TIMERS
+	CALL INIT_TIMER1 ; inicialización del timer1
+	CALL INIT_TIMER0; inicialización del timer0
+    
+	CLR R18 ;parpadeo
 
 LOOP:
-	SBRS ESTADO, 0
-	JMP EstadoX0
-	JMP EstadoX1
 
-EstadoX0:
-	SBRS ESTADO, 1
-	JMP Estado00
-	JMP Estado10
+//Verificar si han pasado 15 ciclos del timer (60 segundos)
+	CPI R23, 15
+	BREQ INCMIN
+//Estados
+	SBRC Estado, 0
+	JMP Hora
+	SBRC  Estado, 1
+	JMP conHora
+	SBRC Estado,2
+	JMP Fecha
+	SBRC Estado, 3
+	JMP conFecha
+	SBRC Estado, 4
+	JMP LOOP
+
+//Rutina inicio timer0
+
+INIT_TIMER0:     //Arrancar el TIMER0
+    LDI R16, 0	//modo normal
+    OUT TCCR0A, R16
+
+    //Configurar el prescaler del Timer0 (1024)
+    LDI R16, (1 << CS02) | (1 << CS00)
+    OUT TCCR0B, R16
+
+    //Iniciar el Timer0 con un valor de 11 (0.25ms)
+    LDI R16, 11
+    OUT TCNT0, R16
+
+    //Activar la interrupción del Timer0 Overflow
+    LDI R16, (1 << TOIE0)
+    STS TIMSK0, R16
+
+    RET
 
 
-EstadoX1:
-	SBRS ESTADO, 1
-	JMP Estado01
-	JMP Estado11
+//Rutina de Timer1
+INIT_TIMER1:
+    LDI R16, 0	//Modo normal
+    STS TCCR1A, R16
 
-Estado00:
-	
+    //Prescaler de 1024
+    LDI R16, (1 << CS12) | (1 << CS10)
+    STS TCCR1B, R16
+
+    //Valor inicial
+    LDI R16, 0xF0		//F0;FC
+    STS TCNT1H, R16		//Valor inicial del contador alto
+    LDI R16, 0xBD;BD;2F
+    STS TCNT1L, R16		//Valor inicial del contador bajo
+
+    //interrupción del TIMER1 por overflow
+    LDI R16, (1 << TOIE1)
+    STS TIMSK1, R16
+    RET
 
 
+//Subrutinas
 
-	CPI R23, 50  //Verificar cuantas pasadas a dado el TIMER0
-	BRNE LOOP
+//Rutina del tiempo
+
+HORA:
+	CBI PORTC, PC5
+	SBI PORTB, PB5
+	CALL MOSTRAR_H
+	JMP LOOP
+INCMIN:
 	CLR R23
-	SBI PIND, PD4	
+	INC R22
+	CPI R22, 10
+	BREQ RES_UMIN
+	JMP LOOP	
+RES_UMIN:
+		CLR R22
+		INC R21
+		BREQ RES_UHOR
+		JMP LOOP	
+RES_UHOR:
+		CLR R21
+		INC R19
+		CPI R19, 10
+		BREQ RES_DHOR // verifica si 
+		CPI R17, 2
+		BREQ REes2
+		JMP LOOP	
+
+RES_DHOR:
+		INC R17 // incrementa registro decena de hora
+		CLR R19 // REINICIA REGISTRO DE UNIDAD DE HORA
+		JMP LOOP	
+REes2:
+	CPI R19, 4
+	BREQ RESET //RESETEAR TODO
+	JMP LOOP	
+RESET:
+	LDI R22, 0  //Unidades de minutos
+	LDI R21, 0  //Decenas de minutos
+	LDI R19, 0  //Unidades de horas
+	LDI R17, 0  //Decenas de horas
+	INC R24
+	INC R13
+	MOV R31, R12
+    CPI R31, 0		//enero
+	BREQ Dias31x
+	CPI R31, 1		//febreo
+	BREQ Dias28x
+	CPI R31, 2		//Marzo
+	BREQ Dias31x
+	CPI R31, 3		//abril
+	BREQ Dias30x
+	CPI R31, 4		//Mayo
+	BREQ Dias31x
+	CPI R31, 5		//Junio
+	BREQ Dias30x
+	CPI R31, 6		//JUlio
+	BREQ Dias31x
+	CPI R31,7		//agosto
+	BREQ Dias31x
+	CPI R31,8		//septiembre
+	BREQ  Dias30x
+	CPI R31,9		//octubre
+	BREQ Dias31x
+	CPI R31,10		//noviembre
+	BREQ Dias30x
+	CPI R31, 11		//diciembre
+	BREQ Dias31x
+	JMP LOOP
+Dias31x:
+	LDI R29, 32
+	JMP VerCasox
+Dias28x:
+	LDI R29, 31
+	JMP VerCasox
+Dias30x:
+	LDI R29, 29
+	JMP VerCasox
+VerCasox:
+	CP R13, R29; VERIFICA Que el numero de dias haya llegado al limiite segun  el mes
+	BREQ AUMENTO
+	CPI R24, 10; Verifica que la unidad de dia haya llegado a 9
+	BREQ diferente_dia
+AUMENTO:
+	LDI R31,1
+	MOV R13, R31
+	CLR R26	;decena de dias
+	LDI R24,1; UNidad de dias
+	INC R27; UNIDAD DE MESES
+	INC R12; MESES
+
+	CPI R27, 10; verificar si la unidad de meses a llegado a 10
+	BREQ sig_mes
+	CPI R28, 1  //Cuando llegue el display 3 a mostar su maximo valor
+	BREQ REST_YEAR
+	JMP LOOP
+sig_mes:
+	INC R28; INCREMENTAR DECENA DE MES
+	CLR R29; RESETEAR UNIDAD DE MES
+	JMP LOOP
+sig_dia:
+	INC R26
+	CLR R24
+	JMP LOOP
+;**************************
+RETARDO:
+    LDI R30, 125
+	INC R5
+delay:
+   DEC R30      
+   BRNE delay    
+   LDI R30, 125
+Delay1:		
+	DEC R30
+	BRNE Delay1     
+	MOV R31, R5
+	CPI R31,6
+	BRNE RETARDO
+	CLR R5
+
+		RET
+		
+
+MOSTRAR_H: 
+    CALL RETARDO
+    //Enciende el display de las unidades de minutos
+    SBI PINB, PB4
+    //Obtén el valor de las unidades de minutos
+    LDI ZH, HIGH(TABLA << 1)
+    LDI ZL, LOW(TABLA << 1)
+    ADD ZL, R22    //R22 contiene las unidades de minutos
+    LPM R25, Z
+    OUT PORTD, R25  //Muestra el valor en el display
+//display 2 dmin
+	CALL RETARDO  //Retardo para la visualización
+	SBI PINB, PB4  //Apaga los otros displays
+    SBI PINB, PB3
+    LDI ZH, HIGH(TABLA << 1)
+    LDI ZL, LOW(TABLA << 1)
+    ADD ZL, R21    //R21 contiene las decenas de minutos
+    LPM R25, Z
+    OUT PORTD, R25  //Muestra el valor en el display
+
+//display3 u hor
+	CALL RETARDO  //Retardo para la visualización
+	SBI PINB, PB3  //Apagar otros displays
+    //Enciende el display de las unidades de horas
+    SBI PINB, PB0
+    //valor de las unidades de horas
+    LDI ZH, HIGH(TABLA << 1)
+    LDI ZL, LOW(TABLA << 1)
+    ADD ZL, R19    //R19 contiene las unidades de horas
+    LPM R25, Z
+    OUT PORTD, R25  //Mostrar el valor en el display
+//display4 d hor
+	CALL RETARDO  //Retardo para la visualización
+	SBI PINB, PB0  //Apagar los otros displays
+    SBI PINB, PB1
+    LDI ZH, HIGH(TABLA << 1)
+    LDI ZL, LOW(TABLA << 1)
+    ADD ZL, R17    //R17 contiene las decenas de horas
+    LPM R25, Z
+    OUT PORTD, R25  //Muestra el valor en el display
 	
+	call RETARDO
+	SBI PINB, PB1
+    RET
+;**************************
+conHora:
+	SBI PORTC, PC5
+	CALL MOSTRAR_H
+	CPI R22, 10  ; display Umin llega a 10
+	BREQ MdecenU ;Salta
+	CPI R19, 10  ;display u hor llega a 10
+	BREQ MdecenaH;Salta
+	CPI R17, 2  ;display Dhor llega  a 2
+	BRSH H24x ;Salta
+	CPI R22, 0 ;display Umin es menor a 0
+	BRLT mDESmin  ;Salta 
+	CPI R19, 0  ;display dHor es menor a 0
+	BRLT mDEShora  ;Salta si es menor a 0 
+	JMP LOOP
+; decremento de unidad de horas afecta a la decena 
+H24x:
+	//CPI R22, 0  ;display 4 llega a -1
+	//BRLT mDESmin  //Salta si es menor, con signo
+	CPI R19, 4   ;y el  display dh tiene un 3
+	BREQ REseteaHoras
+	CPI R19, 0 //Si display 2 muestra un 0
+	BRLT decremento; si r19 es menor a 0 salta
 
-	RJMP LOOP  //Bucle principal infinito
+; Para incremento de decenas de horas
+MdecenaH:
+	INC R17   ;incremento de decenas de horas
+	CLR R19   ;resetear unidad de hora
+	JMP LOOP
+;decremento de d min
+mDESmin:
+	CPI R21, 5 
+	BREQ desCmin
+    CPI R21, 4
+	BREQ desCmin
+    CPI R21, 3
+	BREQ desCmin
+	CPI R21, 2
+	BREQ desCmin
+	CPI R21, 1
+	BREQ desCmin
+	LDI R21, 5
+	LDI R22, 9
+	JMP LOOP
+;resetar horas
+REseteaHoras:
+	CLR R17
+	CLR R19
+	JMP LOOP
+decremento:
+	LDI R17, 1  ; colocar 19 en horas
+	LDI R19, 9
+	JMP LOOP
+; si el display de unidad de horas es menor a cero
+mDEShora:
+	CPI R17, 1   ; y el de decena de hora es 1
+	BREQ DEChOR; decrementar r17 y poner en 9 el de uHor
+	LDI R17, 2
+	LDI R19, 3
+	JMP LOOP
 
+DEChOR:
+	LDI R17, 0  //Colocar el arreglo de display 1 a 09
+	LDI R19, 9
+	JMP LOOP
 
-INITTIMER0:
+desCmin:
+	DEC R21    //Decrementar valor de display 3
+	LDI R22, 9  //Colocar display 4 en 9
+	JMP LOOP
+
+;*************************
+Fecha:
+	SBI PORTB, PB5; APAGAR
+	CALL MOSTRAR_fecha
+	JMP LOOP;
+
+; *********************
+; Rutinas para la gestión de los displays de fecha
+; *********************
+MOSTRAR_fecha: 
+//display un dia
+    CALL RETARDO  //Retardo para la visualización
+    SBI PINB, PB0
+    LDI ZH, HIGH(TABLA << 1)
+    LDI ZL, LOW(TABLA << 1)
+    ADD ZL, R24    //R24 contiene las unidades de dias
+    LPM R25, Z
+    OUT PORTD, R25  //Muestra el valor en el display
+//display 2d dia
+	CALL RETARDO   //Retardo para la visualización
+	SBI PINB, PB0 
+    SBI PINB, PB1
+    LDI ZH, HIGH(TABLA << 1)
+    LDI ZL, LOW(TABLA << 1)
+    ADD ZL, R26   //R26 contiene las decenas de dias
+    LPM R25, Z
+    OUT PORTD, R25  //Muestra el valor en el display
+
+// display3 u mes
+	CALL RETARDO  //Retardo para la visualización
+	SBI PINB, PB1  //Apagar otros displays
+    SBI PINB, PB4
+    LDI ZH, HIGH(TABLA << 1)
+    LDI ZL, LOW(TABLA << 1)
+    ADD ZL, R27    //R27 contiene las unidades de mes
+    LPM R25, Z
+    OUT PORTD, R25  //Mostrar el valor en el display
+//display4 d mes
+	CALL RETARDO  //Retardo para la visualización
+	SBI PINB, PB4  //Apagar los otros displays
+    SBI PINB, PB3
+    LDI ZH, HIGH(TABLA << 1)
+    LDI ZL, LOW(TABLA << 1)
+    ADD ZL, R28    //R28 contiene las decenas de mes
+    LPM R25, Z
+    OUT PORTD, R25  //Muestra el valor en el display
+	CALL RETARDO
+	SBI PINB, PB3
+    RET
+
+Fecha:
+	SBI PORTB, PB5
+	CALL MOSTRAR_fecha
+	MOV R31, R12
+    CPI R31, 0// enero
+	BREQ Dias31
+	CPI R31, 1// febreo
+	BREQ Dias28
+	CPI R31, 2//Marzo
+	BREQ Dias31
+	CPI R31, 3//abril
+	BREQ Dias30
+	CPI R31, 4//Mayo
+	BREQ Dias31
+	CPI R31, 5//Junio
+	BREQ Dias30
+	CPI R31, 6//JUlio
+	BREQ Dias31
+	CPI R31,7//agosto
+	BREQ Dias31
+	CPI R31,8//septiembre
+	BREQ  Dias30
+	CPI R31,9//octubre
+	BREQ Dias31
+	CPI R31,10//noviembre
+	BREQ Dias30
+	CPI R31, 11//diciembre; */
+	BREQ Dias31
+	JMP LOOP
+Dias31:
+	LDI R29, 32
+	//JMP 
+Dias28:
+	LDI R29, 29
+	//JMP 
+Dias30:
+	LDI R29, 31
+	//JMP 
+
+icDMES:
+	INC R28
+	CLR R27
+	JMP LOOP
+
+ver_Me:
+	CPI R27, 3  ; verificar si la unidad de mes es 2
+	BREQ Res_Mes
+	CPI R27, -1; si es 0
+	BREQ Dec_mes
+	JMP LOOP
+; reiniciar meses
+Res_Mes:
+	CLR R28
+	LDI R27, 1
+	CLR R12
+	JMP LOOP
+
+Dec_mes:
+	LDI R28, 0
+	LDI R27, 9
+	JMP LOOP
+
+RES_DIA:
 	LDI R26, 0
-	OUT TCCR0A, R26 //trabajar de forma normal con el temporizador
+	LDI R24, 1; AL RESETEAR DIA VUELVE A 1
+	MOV R13, R24
+	JMP LOOP
 
-	LDI R26, (1<<CS02)|(1<<CS00)
-	OUT TCCR0B, R26  //Configurar el temporizador con prescaler de 1024
 
-	LDI R26, 237
-	OUT TCNT0, R26 //Iniciar timer en 158 para conteo
-
-	LDI R26, (1 << TOIE0)
-	STS TIMSK0, R26 //Activar interrupción del TIMER0 de mascara por overflow
+//PULSADORES
+ISR_PCINT1:
+	PUSH R16         //Se guarda en pila el registro R16
+	IN R16, SREG
+	PUSH R16
 	
-	RET
-//******************************************************************************************************************
-//Subrutina para inicializar TIMER0
-//******************************************************************************************************************
+	SBIS PINC, PC0
+	JMP INCREMENT
+	SBRC Estado, 0
+	JMP ISR_Hora
+	SBRC  Estado, 1
+	JMP ISR_conHora
+	SBRC Estado,2
+	JMP ISR_Fecha
+	SBRC Estado, 3
+	JMP ISR_conFecha
+	SBRC  Estado, 4
+	LDI Estado,1
+	jmp But_goOut
+;PRIMER ESTADO
+ISR_Hora:
+	SBIS PINC, PC0
+	JMP INCREMENT
+	JMP But_goOut
+; SEGUNDO ESTADO
+INCREMENT:
+	ROL Estado
+	SBRC Estado, 4
+	LDI Estado,1
+	CALL coMpC0
+	JMP But_goOut
+	
+ISR_conHora:
+	SBIS PINC, PC0
+	JMP INCREMENT
+	SBIS PINC, PC1
+    RJMP INC_MIN
+    SBIS PINC, PC2
+    RJMP INC_HOR
+    SBIS PINC, PC3
+    RJMP DEC_MIN
+    SBIS PINC, PC4
+    RJMP DEC_HOR
+	JMP But_goOut
+INC_MIN:
+	INC R22 ; ; Incrementa los minutos
+	CALL coMpC1
+	JMP But_goOut
+INC_HOR:
+	INC R19 ; Incrementa los horas
+	CALL coMpC2
+	JMP But_goOut
+DEC_MIN:
+	DEC R22 ; decrementa los minutos
+	CALL coMpC3
+	JMP But_goOut
+DEC_HOR:
+	DEC R19 ; decrementa horass
+	CALL coMpC4
+	JMP But_goOut
+; TERCER ESTADO
+ISR_Fecha:
+	SBIC PINC, PC0
+	JMP INCREMENT
+	JMP But_goOut ; solo muestra fecha 
 
+; ***************************
+; Manejador de la interrupción del Timer0 Overflow
+; ***************************
 ISR_TIMER0_OVF:
-	PUSH R16   //Se guarda R16 En la pila 
-	IN R16, SREG  
-	PUSH R16      //Se guarda SREG actual en R16
+    PUSH R16		//Guardar R16 en la pila
+    IN R16, SREG	//Guardar el estado de los flags de interrupción en R16
+    PUSH R16
 
-	LDI R16, 237  //Cagar el valor de desbordamiento
-	OUT TCNT0, R16  //Cargar el valor inicial del contador
-	SBI TIFR0, TOV0   //Borrar la bandera de TOV0
-	INC R23    //Incrementar el contador de 20ms
+    LDI R16, 11		//Configurar el Timer0 para un nuevo ciclo
+    OUT TCNT0, R16
+	INC R18			//Incrementar la variable de control del parpadeo del LED
+    SBI TIFR0, TOV0		
 
-	POP R16    //Obtener el valor del SREG
-	OUT SREG, R16   //Restaurar antiguos valores del SREG
-	POP R16    //Obtener el valor de R16
+ISR_TIMER1_OVF:
+    PUSH R16
+    IN R16, SREG
+    PUSH R16    //Restablecer el contador Timer1
+    LDI R16, 0xF0
+    STS TCNT1H, R16   //Valor inicial del contador alto
+    LDI R16, 0xBD
+    STS TCNT1L, R16   //Valor inicial del contador bajo
+	INC R23
+    SBI TIFR1, TOV1
+    //Restaurar registros desde la pila
+    POP R16
+    OUT SREG, R16
+    POP R16
 	
-	RETI
+    RETI
+
